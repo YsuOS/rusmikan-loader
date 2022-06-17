@@ -1,0 +1,3 @@
+[submodule "mikanos-build"]
+	path = mikanos-build
+	url = git@github.com:YsuOS/mikanos-build.git
