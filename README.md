@@ -1,1 +1,1 @@
-MikanOS in Rust = RusmikanOS
+Bootloader worked as an UEFI application for Rusmikan
