@@ -58,18 +58,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // Draw directly to the frame buffer
     let gop = system_table.boot_services().locate_protocol::<GraphicsOutput>().unwrap();
     let gop = unsafe { &mut *gop.get() };
-    let fb_info = gop.current_mode_info();
-    let stride = fb_info.stride();
-    let (hori, vert) = fb_info.resolution();
     let mut fb = gop.frame_buffer();
-    //let pixel_format = fb_info.pixel_format();   // BGR
-    for y in 0..vert {
-        for x in 0..hori {
-            unsafe {
-                // BGR is 32-bit long, 24-bit BGR and last byte is reserved
-                fb.write_value::<[u8;3]>((x+stride*y)*4, [255, 255, 255]);
-            }
-        }
+    let fb_addr = fb.as_mut_ptr();
+    let fb_size = fb.size();
+    let fb_ptr = unsafe { core::slice::from_raw_parts_mut(fb_addr, fb_size as usize) };
+    for i in 0..fb_size {
+        fb_ptr[i as usize] = 255;
     }
 
     // Read kernel elf image into memory
@@ -91,7 +85,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
             MemoryType::LOADER_DATA,
             (size + EFI_PAGE_SIZE - 1) /EFI_PAGE_SIZE,
         )
-        .unwrap();
+        .expect("failed to allocate pages for kernel");
     file.read(unsafe { core::slice::from_raw_parts_mut(KERNEL_BASE_ADDR as *mut u8, size) }).unwrap();
     drop(file);
     writeln!(system_table.stdout(), "Done").unwrap();
@@ -104,8 +98,8 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         core::slice::from_raw_parts((KERNEL_BASE_ADDR + 24) as *const u8, 8)
     });
     //writeln!(system_table.stdout(), "{:x}", entry_point_addr).unwrap();
-    let entry_point: extern "sysv64" fn() = unsafe { mem::transmute(entry_point_addr as usize) };
-    entry_point();
+    let entry_point: extern "sysv64" fn(*mut u8, u64) = unsafe { mem::transmute(entry_point_addr as usize) };
+    entry_point(fb_addr, fb_size as u64);
 
     loop {}
 }
