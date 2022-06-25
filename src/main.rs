@@ -9,6 +9,7 @@ use uefi::table::boot::{MemoryDescriptor, MemoryType, AllocateType};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType, FileInfo};
 use uefi::CStr16;
 use byteorder::{LittleEndian, ByteOrder};
+use uefi::proto::console::gop::GraphicsOutput;
 
 #[macro_use]
 extern crate alloc;
@@ -18,14 +19,15 @@ const EFI_PAGE_SIZE: usize = 0x1000;
 
 #[entry]
 fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
+    // Output Hello world
     uefi_services::init(&mut system_table).unwrap();
     writeln!(system_table.stdout(), "Hello world").unwrap();
 
+    // Write memory map to file
     let mut root_dir = {
         let sfs = system_table.boot_services().get_image_file_system(image).unwrap().interface;
         unsafe {&mut *sfs.get()}.open_volume().unwrap()
     };
-
     writeln!(system_table.stdout(), "writing memory map...").unwrap();
     let mut file = match root_dir
         .open(CStr16::from_str_with_buf("memmap", &mut [0; 8]).unwrap(), 
@@ -37,15 +39,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         FileType::Regular(file) => file,
         FileType::Dir(_) => panic!(),
     };
-
     let size = system_table.boot_services().memory_map_size().map_size 
         + 8 * mem::size_of::<MemoryDescriptor>();
     let mut buf = vec![0u8; size];
     let (_, memory_descriptor) = system_table.boot_services().memory_map(&mut buf).unwrap();
-
     file.write("Index, Type, Type(name), PhysicalStart, \
         NumberOfPages, Attribute\n".as_bytes()).unwrap();
-
     for (i, d) in memory_descriptor.enumerate() {
         let line = format!(
             "{}, {:x}, {:?}, {:08x}, {:x}, {:x}\n", 
@@ -56,6 +55,24 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     drop(file);
     writeln!(system_table.stdout(), "Done").unwrap();
 
+    // Draw directly to the frame buffer
+    let gop = system_table.boot_services().locate_protocol::<GraphicsOutput>().unwrap();
+    let gop = unsafe { &mut *gop.get() };
+    let fb_info = gop.current_mode_info();
+    let stride = fb_info.stride();
+    let (hori, vert) = fb_info.resolution();
+    let mut fb = gop.frame_buffer();
+    //let pixel_format = fb_info.pixel_format();   // BGR
+    for y in 0..vert {
+        for x in 0..hori {
+            unsafe {
+                // BGR is 32-bit long, 24-bit BGR and last byte is reserved
+                fb.write_value::<[u8;3]>((x+stride*y)*4, [255, 255, 255]);
+            }
+        }
+    }
+
+    // Read kernel elf image into memory
     writeln!(system_table.stdout(), "Loading kernel...").unwrap();
     let mut file = match root_dir
         .open(CStr16::from_str_with_buf("kernel.elf", &mut [0; 12]).unwrap(),
@@ -82,6 +99,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // exit boot service
     system_table.exit_boot_services(image, &mut buf).unwrap();
 
+    // Load kernel
     let entry_point_addr = LittleEndian::read_u64(unsafe {
         core::slice::from_raw_parts((KERNEL_BASE_ADDR + 24) as *const u8, 8)
     });
