@@ -9,3 +9,5 @@ edition = "2021"
 uefi = { version = "0.16.0", features = ['exts'] }
 uefi-services = "0.13.0"
 byteorder = { version = "1", default-features = false }
+rusmikan = { path = ".." }
+goblin = { version = "0.5", features = ["elf32", "elf64", "endian_fd"], default-features = false }

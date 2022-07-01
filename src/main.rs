@@ -9,12 +9,13 @@ use uefi::table::boot::{MemoryDescriptor, MemoryType, AllocateType};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType, FileInfo};
 use uefi::CStr16;
 use byteorder::{LittleEndian, ByteOrder};
-use uefi::proto::console::gop::GraphicsOutput;
+use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
+use rusmikan::FrameBufferConfig;
+use goblin::elf;
 
 #[macro_use]
 extern crate alloc;
 
-const KERNEL_BASE_ADDR: usize = 0x100000;
 const EFI_PAGE_SIZE: usize = 0x1000;
 
 #[entry]
@@ -55,18 +56,26 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     drop(file);
     writeln!(system_table.stdout(), "Done").unwrap();
 
-    // Draw directly to the frame buffer
     let gop = system_table.boot_services().locate_protocol::<GraphicsOutput>().unwrap();
     let gop = unsafe { &mut *gop.get() };
-    let mut fb = gop.frame_buffer();
-    let fb_addr = fb.as_mut_ptr();
-    let fb_size = fb.size();
-    let fb_ptr = unsafe { core::slice::from_raw_parts_mut(fb_addr, fb_size as usize) };
-    for i in 0..fb_size {
-        fb_ptr[i as usize] = 255;
-    }
+    let fb_info = gop.current_mode_info();
+    let (hori, vert) = fb_info.resolution();
+    let pixels_per_scan_line = fb_info.stride();
+    let pixel_format = match fb_info.pixel_format() {
+        PixelFormat::Rgb => rusmikan::PixelFormat::PixelRGBResv8BitPerColor,
+        PixelFormat::Bgr => rusmikan::PixelFormat::PixelBGRResv8BitPerColor,
+        _ => panic!(),
+    };
+    let fb = gop.frame_buffer();
+    let config = FrameBufferConfig {
+        frame_buffer: fb,
+        horizontal_resolution: hori,
+        vertical_resolution: vert,
+        pixels_per_scan_line,
+        pixel_format,
+    };
 
-    // Read kernel elf image into memory
+    // Load elf image into memory
     writeln!(system_table.stdout(), "Loading kernel...").unwrap();
     let mut file = match root_dir
         .open(CStr16::from_str_with_buf("kernel.elf", &mut [0; 12]).unwrap(),
@@ -79,14 +88,39 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         FileType::Dir(_) => panic!(),
     };
     let size = file.get_boxed_info::<FileInfo>().unwrap().file_size() as usize;
+    let mut buf = vec![0; size];
+    file.read(&mut buf).unwrap();
+    let elf = elf::Elf::parse(&buf).expect("Failed to parse elf file");
+    
+    let mut dest_first = usize::MAX;
+    let mut dest_last = 0;
+    for ph in elf.program_headers.iter() {
+        if ph.p_type != elf::program_header::PT_LOAD {
+            continue;
+        }
+        dest_first = dest_first.min(ph.p_vaddr as usize);
+        dest_last = dest_last.max((ph.p_vaddr + ph.p_memsz) as usize);
+    }
+
     system_table.boot_services()
         .allocate_pages(
-            AllocateType::Address(KERNEL_BASE_ADDR),
+            AllocateType::Address(dest_first),
             MemoryType::LOADER_DATA,
-            (size + EFI_PAGE_SIZE - 1) /EFI_PAGE_SIZE,
+            (dest_last - dest_first + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE,
         )
         .expect("failed to allocate pages for kernel");
-    file.read(unsafe { core::slice::from_raw_parts_mut(KERNEL_BASE_ADDR as *mut u8, size) }).unwrap();
+
+    for ph in elf.program_headers.iter() {
+        if ph.p_type != elf::program_header::PT_LOAD {
+            continue;
+        }
+        let ofs = ph.p_offset as usize;
+        let fsize = ph.p_filesz as usize;
+        let msize = ph.p_memsz as usize;
+        let dest = unsafe { core::slice::from_raw_parts_mut(ph.p_vaddr as *mut u8, msize) };
+        dest[..fsize].copy_from_slice(&buf[ofs..ofs + fsize]);
+        dest[fsize..].fill(0);
+    }
     drop(file);
     writeln!(system_table.stdout(), "Done").unwrap();
 
@@ -95,11 +129,11 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     // Load kernel
     let entry_point_addr = LittleEndian::read_u64(unsafe {
-        core::slice::from_raw_parts((KERNEL_BASE_ADDR + 24) as *const u8, 8)
+        core::slice::from_raw_parts((dest_first + 24) as *const u8, 8)
     });
     //writeln!(system_table.stdout(), "{:x}", entry_point_addr).unwrap();
-    let entry_point: extern "sysv64" fn(*mut u8, u64) = unsafe { mem::transmute(entry_point_addr as usize) };
-    entry_point(fb_addr, fb_size as u64);
+    let entry_point: extern "sysv64" fn(FrameBufferConfig) = unsafe { mem::transmute(entry_point_addr as usize) };
+    entry_point(config);
 
     loop {}
 }
