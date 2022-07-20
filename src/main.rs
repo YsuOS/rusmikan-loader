@@ -62,8 +62,8 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     let (hori, vert) = fb_info.resolution();
     let pixels_per_scan_line = fb_info.stride();
     let pixel_format = match fb_info.pixel_format() {
-        PixelFormat::Rgb => rusmikan::PixelFormat::PixelRGBResv8BitPerColor,
-        PixelFormat::Bgr => rusmikan::PixelFormat::PixelBGRResv8BitPerColor,
+        PixelFormat::Rgb => rusmikan::PixelFormat::RGB,
+        PixelFormat::Bgr => rusmikan::PixelFormat::BGR,
         _ => panic!(),
     };
     let fb = gop.frame_buffer();
