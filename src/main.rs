@@ -10,7 +10,7 @@ use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType, FileInfo
 use uefi::CStr16;
 use byteorder::{LittleEndian, ByteOrder};
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
-use rusmikan::FrameBufferConfig;
+use rusmikan::{FrameBuffer,FrameBufferConfig};
 use goblin::elf;
 
 #[macro_use]
@@ -66,9 +66,10 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         PixelFormat::Bgr => rusmikan::PixelFormat::BGR,
         _ => panic!(),
     };
-    let fb = gop.frame_buffer();
+    let mut fb = gop.frame_buffer();
+    let fb_ptr = fb.as_mut_ptr();
     let config = FrameBufferConfig {
-        frame_buffer: fb,
+        frame_buffer: FrameBuffer{base: fb_ptr},
         horizontal_resolution: hori,
         vertical_resolution: vert,
         pixels_per_scan_line,
