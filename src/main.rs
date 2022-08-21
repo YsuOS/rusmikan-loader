@@ -1,7 +1,9 @@
 #![no_main]
 #![no_std]
 #![feature(abi_efiapi)]
+#![feature(vec_into_raw_parts)]
 
+use alloc::vec::Vec;
 use core::fmt::Write;
 use core::mem;
 use uefi::prelude::*;
@@ -40,9 +42,9 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         FileType::Regular(file) => file,
         FileType::Dir(_) => panic!(),
     };
-    let size = system_table.boot_services().memory_map_size().map_size 
+    let mmap_size = system_table.boot_services().memory_map_size().map_size 
         + 8 * mem::size_of::<MemoryDescriptor>();
-    let mut buf = vec![0u8; size];
+    let mut buf = vec![0u8; mmap_size];
     let (_, memory_descriptor) = system_table.boot_services().memory_map(&mut buf).unwrap();
     file.write("Index, Type, Type(name), PhysicalStart, \
         NumberOfPages, Attribute\n".as_bytes()).unwrap();
@@ -125,16 +127,29 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     drop(file);
     writeln!(system_table.stdout(), "Done").unwrap();
 
-    // exit boot service
-    system_table.exit_boot_services(image, &mut buf).unwrap();
+    // exit boot service and retrieve memory map to own MemoryDescriptor
+    let mut buffer = Vec::with_capacity(mmap_size);
+    let (_, memory_descriptors) = system_table.exit_boot_services(image, &mut buf).unwrap();        
+    for d in memory_descriptors {
+       buffer.push(rusmikan::MemoryDescriptor {
+           phys_start: d.phys_start,
+       }) 
+    }
+    let memory_map = {
+        let (ptr, len, _) = buffer.into_raw_parts();
+        rusmikan::MemoryMap {
+            descriptors: ptr,
+            descriptor_len: len as u64
+        }
+    };
 
     // Load kernel
     let entry_point_addr = LittleEndian::read_u64(unsafe {
         core::slice::from_raw_parts((dest_first + 24) as *const u8, 8)
     });
     //writeln!(system_table.stdout(), "{:x}", entry_point_addr).unwrap();
-    let entry_point: extern "sysv64" fn(FrameBufferConfig) = unsafe { mem::transmute(entry_point_addr as usize) };
-    entry_point(config);
+    let entry_point: extern "sysv64" fn(FrameBufferConfig, rusmikan::MemoryMap) = unsafe { mem::transmute(entry_point_addr as usize) };
+    entry_point(config, memory_map);
 
     loop {}
 }
