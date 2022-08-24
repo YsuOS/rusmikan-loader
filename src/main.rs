@@ -19,7 +19,7 @@ use goblin::elf;
 #[macro_use]
 extern crate alloc;
 
-const EFI_PAGE_SIZE: usize = 0x1000;
+const UEFI_PAGE_SIZE: usize = 0x1000;
 
 fn dump_memory_map(image: Handle, system_table: &SystemTable<Boot>) {
     let mut root_dir = {
@@ -93,7 +93,7 @@ fn load_elf(src: &[u8], system_table: &SystemTable<Boot>) -> u64 {
         .allocate_pages(
             AllocateType::Address(dest_first),
             MemoryType::LOADER_DATA,
-            (dest_last - dest_first + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE,
+            (dest_last - dest_first + UEFI_PAGE_SIZE - 1) / UEFI_PAGE_SIZE,
         )
         .expect("failed to allocate pages for kernel");
 
@@ -145,9 +145,11 @@ fn exit_boot_services(image: Handle, system_table: SystemTable<Boot>)
     let mut descriptors = Vec::with_capacity(mmap_size);
     let (system_table, memory_descriptors) = system_table.exit_boot_services(image, &mut mmap_buf).unwrap();        
     for d in memory_descriptors {
-       descriptors.push(rusmikan::MemoryDescriptor {
-           phys_start: d.phys_start,
-       }) 
+        if is_available_after_exit_boot_services(d.ty) {
+            descriptors.push(rusmikan::MemoryDescriptor {
+                phys_start: d.phys_start,
+            }) 
+        }        
     }
     let memory_map = {
         let (ptr, len, _) = descriptors.into_raw_parts();
@@ -158,6 +160,14 @@ fn exit_boot_services(image: Handle, system_table: SystemTable<Boot>)
     };
     (system_table, memory_map)
 }
+
+fn is_available_after_exit_boot_services(ty: MemoryType) -> bool {
+    matches!(
+        ty,
+        MemoryType::CONVENTIONAL | MemoryType::BOOT_SERVICES_CODE | MemoryType::BOOT_SERVICES_DATA
+    )
+}
+
 
 #[entry]
 fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
@@ -172,13 +182,13 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     
     // Load elf image into memory
     let entry_point_addr = load_kernel(image, &system_table);
-    //writeln!(system_table.stdout(), "{:x}", entry_point_addr).unwrap();
-    let entry_point: extern "sysv64" fn(FrameBufferConfig, rusmikan::MemoryMap) = unsafe { mem::transmute(entry_point_addr as usize) };
+    writeln!(system_table.stdout(), "{:x}", entry_point_addr).unwrap();
+    let entry_point: extern "sysv64" fn(&FrameBufferConfig, &rusmikan::MemoryMap) = unsafe { mem::transmute(entry_point_addr as usize) };
    
     // exit boot service and retrieve memory map to own MemoryDescriptor
     let (_, memory_map) = exit_boot_services(image, system_table);
 
-    entry_point(config, memory_map);
+    entry_point(&config, &memory_map);
 
     loop {}
 }
