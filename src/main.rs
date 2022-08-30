@@ -149,8 +149,8 @@ fn exit_boot_services(image: Handle, system_table: SystemTable<Boot>)
             descriptors.push(rusmikan::MemoryDescriptor {
                 phys_start: d.phys_start,
                 phys_end: d.phys_start + d.page_count * UEFI_PAGE_SIZE as u64,
-            }) 
-        }        
+            })
+        }
     }
     let memory_map = {
         let (ptr, len, _) = descriptors.into_raw_parts();
