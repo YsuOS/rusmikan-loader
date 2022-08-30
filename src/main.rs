@@ -148,6 +148,7 @@ fn exit_boot_services(image: Handle, system_table: SystemTable<Boot>)
         if is_available_after_exit_boot_services(d.ty) {
             descriptors.push(rusmikan::MemoryDescriptor {
                 phys_start: d.phys_start,
+                phys_end: d.phys_start + d.page_count * UEFI_PAGE_SIZE as u64,
             }) 
         }        
     }
